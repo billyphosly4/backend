@@ -15,7 +15,8 @@ const allowedOrigins = [
   'http://localhost:3000',        // React dev
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000',
-  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])  // Vercel frontend
+  'https://prime-sms-hub-react.vercel.app',  // Vercel production
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])  // Vercel frontend from env
 ];
 
 app.use(cors({
