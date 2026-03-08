@@ -14,7 +14,16 @@ module.exports = async (req, res) => {
     const path = `/v1/user/buy/activation/${encodeURIComponent(country)}/${encodeURIComponent(operator)}/${encodeURIComponent(product)}`;
     const url = `https://5sim.net${path}`;
     const resp = await axios.get(url, { headers: { Authorization: `Bearer ${KEY}`, Accept: 'application/json' }, timeout: 20000 });
-    return res.status(200).json(resp.data);
+    
+    // Apply 40% profit margin
+    const data = resp.data;
+    if (data.price) {
+      data.cost_price = data.price;
+      data.profit_margin = parseFloat((data.price * 0.40).toFixed(2));
+      data.price = parseFloat((data.price * 1.40).toFixed(2));
+    }
+    
+    return res.status(200).json(data);
   } catch (err) {
     console.error('api/5sim/buy error:', err.response?.status, err.response?.data || err.message || err);
     return res.status(502).json({ error: 'Could not complete purchase on 5sim', details: err.response?.data || err.message });
