@@ -206,8 +206,16 @@ app.post('/api/5sim/buy', async (req, res) => {
     const path = `/user/buy/activation/${country}/${operator}/${product}`;
     const resp = await call5sim(path, { requiresAuth: true });
 
+    // Apply 40% profit margin
+    const data = resp.data;
+    if (data.price) {
+      data.cost_price = data.price;
+      data.profit_margin = parseFloat((data.price * 0.40).toFixed(2));
+      data.price = parseFloat((data.price * 1.40).toFixed(2));
+    }
+
     console.log(`✅ 5sim buy successful: ${resp.data.id}`);
-    return res.json(resp.data);
+    return res.json(data);
   } catch (err) {
     console.error('❌ 5sim buy error:', err.response?.status, err.response?.data?.error || err.message);
 
