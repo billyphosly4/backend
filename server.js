@@ -16,16 +16,27 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000',
   'https://prime-sms-hub-react.vercel.app',  // Vercel production
-  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])  // Vercel frontend from env
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])  // Frontend URL from env
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow no origin (mobile apps, curl requests)
+    if (!origin) {
       callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+      return;
     }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    
+    // Log rejected origins for debugging
+    console.warn(`CORS rejected origin: ${origin}`);
+    console.warn(`Allowed origins: ${allowedOrigins.join(', ')}`);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true
 }));
