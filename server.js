@@ -24,7 +24,7 @@ try {
   console.warn('⚠️ Firebase Admin initialization failed. Secure features may not work:', error.message);
 }
 
-const db = admin.firestore();
+const db = admin.apps.length > 0 ? admin.firestore() : null;
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -714,18 +714,28 @@ app.get('/paystack/verify/:reference', async (req, res) => {
 });
 
 // ==================== PAYSTACK WEBHOOK (REAL) ====================
-app.post('/paystack/webhook', async (req, res) => {
+// New endpoint as requested by user
+app.post('/api/payments/webhook', async (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
-  if (!secret) return res.status(200).send('Webhook secret not configured');
+  if (!secret) {
+    console.error('❌ Paystack webhook: PAYSTACK_SECRET_KEY not configured in environment');
+    return res.status(200).send('Webhook secret not configured');
+  }
 
   const hash = crypto.createHmac('sha512', secret).update(req.rawBody).digest('hex');
   if (hash !== req.headers['x-paystack-signature']) {
-    console.error('❌ Paystack webhook: Invalid signature');
+    console.error('❌ Paystack webhook: Invalid signature header');
     return res.status(401).send('Invalid signature');
   }
 
   try {
     const event = req.body;
+    console.log(`📩 Paystack Webhook received: ${event.event}`, { 
+      reference: event.data?.reference,
+      amount: event.data?.amount,
+      currency: event.data?.currency
+    });
+
     if (event.event === 'charge.success') {
       const data = event.data;
       const reference = data.reference;
@@ -742,10 +752,15 @@ app.post('/paystack/webhook', async (req, res) => {
         try { metadata = JSON.parse(metadata); } catch(e) { console.error('Metadata parse error (webhook):', e); }
       }
 
-      const uid = metadata.custom_fields?.find(f => f.variable_name === 'uid')?.value || metadata.uid || null;
+      // Robust UID extraction
+      const uid = metadata.custom_fields?.find(f => f.variable_name === 'uid')?.value || 
+                  metadata.uid || 
+                  data.customer?.metadata?.uid || 
+                  null;
 
       if (!uid) {
         console.error('⚠️ Paystack webhook: No uid in metadata for reference', reference);
+        // Still return 200 to acknowledge receipt, otherwise Paystack will keep retrying
         return res.status(200).send('No uid found in metadata');
       }
 
@@ -764,7 +779,7 @@ app.post('/paystack/webhook', async (req, res) => {
         currency: currency,
         originalAmount: data.amount / 100,  // Raw amount before KES conversion
         originalCurrency: currency,          // Track original currency for audit trail
-        description: `Funded wallet via Paystack`,
+        description: `Funded wallet via Paystack Webhook`,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         reference: reference,
         status: 'success',
@@ -786,6 +801,8 @@ app.post('/paystack/webhook', async (req, res) => {
 
       await batch.commit();
       console.log(`✅ Paystack webhook: successfully funded $${amount} for user ${uid}. New wallet: $${newWallet}`);
+    } else {
+      console.log(`ℹ️ Paystack webhook: Ignored event type: ${event.event}`);
     }
     
     res.sendStatus(200);
@@ -793,6 +810,18 @@ app.post('/paystack/webhook', async (req, res) => {
     console.error('❌ Paystack webhook process error:', err);
     res.sendStatus(500);
   }
+});
+
+// Legacy endpoint for backward compatibility (delegates to new one)
+app.post('/paystack/webhook', (req, res) => {
+  console.log('🔄 Paystack webhook: legacy endpoint called, redirecting internally...');
+  // Since it's a POST, we can't easily redirect, so we just call the same logic
+  // express will handle it since we use app.post for both.
+  // Actually, I'll just keep the logic in one and call it.
+  // For simplicity, I'll just make both point to the same handler function if I were refactoring more deeply.
+  // But here I'll just duplicate or keep it similar.
+  req.url = '/api/payments/webhook';
+  app.handle(req, res);
 });
 
 // ==================== REAL TELEGRAM INTEGRATION ====================
@@ -954,6 +983,55 @@ app.post('/api/admin/manual-credit', async (req, res) => {
   } catch (err) {
     console.error('❌ Manual credit error:', err.message);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== PAYSTACK REFUND (ADMIN) ====================
+app.post('/api/admin/paystack/refund', async (req, res) => {
+  const ADMIN_SECRET = process.env.ADMIN_SECRET || 'admin-secret-change-me';
+  const providedSecret = req.headers['x-admin-secret'] || req.body.adminSecret;
+  const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
+
+  if (providedSecret !== ADMIN_SECRET) {
+    return res.status(403).json({ error: 'Forbidden – wrong admin secret' });
+  }
+
+  if (!PAYSTACK_SECRET) {
+    return res.status(500).json({ error: 'Paystack secret key not configured on server' });
+  }
+
+  const { transactionId, paystackReference, amount } = req.body;
+
+  if (!transactionId || !paystackReference) {
+    return res.status(400).json({ error: 'transactionId and paystackReference are required' });
+  }
+
+  console.log(`♻️ Refund request for transaction ${transactionId} (Ref: ${paystackReference})`);
+
+  try {
+    const url = 'https://api.paystack.co/refund';
+    const resp = await axios.post(url, 
+      { transaction: paystackReference, amount: amount ? (amount * 100) : undefined }, // Amount in kobo/cents if provided
+      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, 'Content-Type': 'application/json' }, timeout: 15000 }
+    );
+
+    if (resp.data.status) {
+      // Update Firestore
+      await db.collection('transactions').doc(transactionId).update({
+        status: 'refunded',
+        refundRef: resp.data.data?.id || `RRN_${Date.now()}`,
+        refundedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      console.log(`✅ Refund successful for transaction ${transactionId}`);
+      return res.json({ success: true, data: resp.data.data });
+    } else {
+      console.error('❌ Paystack refund failed:', resp.data.message);
+      return res.status(400).json({ error: resp.data.message });
+    }
+  } catch (err) {
+    console.error('❌ Refund process error:', err.response?.data || err.message);
+    return res.status(502).json({ error: 'Paystack refund call failed', details: err.response?.data || err.message });
   }
 });
 
