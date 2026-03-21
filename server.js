@@ -96,14 +96,37 @@ const mockPrices = {
   }
 };
 
-const KES_TO_USD_RATE = 0.0078; // 1 KES = $0.0078 USD (Example rate, should be updated or fetched)
+// Dynamic Settings from Firestore
+let PROFIT_PERCENTAGE = 35;
+let PROFIT_MULTIPLIER = 1.35;
+let KES_TO_USD_RATE = 0.0078;
 
-const PROFIT_PERCENTAGE = 35; // 35% profit margin
-const PROFIT_MULTIPLIER = 1.35;
+// Watch for changes in admin settings
+if (db) {
+  db.collection('adminSettings').doc('global').onSnapshot(docSnap => {
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      if (data.serviceMarkup !== undefined) {
+        PROFIT_PERCENTAGE = Number(data.serviceMarkup);
+        PROFIT_MULTIPLIER = 1 + (PROFIT_PERCENTAGE / 100);
+        console.log(`📈 Profit margin updated from Firestore: ${PROFIT_PERCENTAGE}%`);
+      }
+      if (data.usdToKesRate !== undefined) {
+        KES_TO_USD_RATE = 1 / Number(data.usdToKesRate); // UI usually stores KES per 1 USD (e.g. 130)
+        // Wait, let's check Settings.jsx: usdToKesRate: 128.2
+        // If 1 USD = 128.2 KES, then 1 KES = 1/128.2 USD
+        // Previous hardcoded: 0.0078 (which is roughly 1/128.2)
+        console.log(`💱 Exchange rate updated from Firestore: 1 USD = ${data.usdToKesRate} KES (1 KES = $${KES_TO_USD_RATE.toFixed(5)})`);
+      }
+    }
+  }, err => {
+    console.error('❌ Error listening to adminSettings:', err);
+  });
+}
 
 /**
  * Price Calculator Function
- * Calculates what the user pays based on API cost and 35% profit
+ * Calculates what the user pays based on API cost and dynamic profit
  */
 const calculateUserPrice = (apiCost) => {
   return parseFloat((apiCost * PROFIT_MULTIPLIER).toFixed(2));
@@ -387,6 +410,20 @@ app.get('/api/admin/profit-report', async (req, res) => {
     console.error('Profit report error:', err);
     res.status(500).json({ error: 'Failed to generate profit report' });
   }
+});
+
+// ==================== CONFIG & HEALTH ====================
+app.get('/api/config', (req, res) => {
+  res.json({
+    profitPercentage: PROFIT_PERCENTAGE,
+    kesToUsdRate: KES_TO_USD_RATE,
+    usdToKesRate: 1 / KES_TO_USD_RATE,
+    status: 'ok'
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Backend is running' });
 });
 
 // Check order / Get SMS (requires authentication)
