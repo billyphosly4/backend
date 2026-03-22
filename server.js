@@ -100,6 +100,7 @@ const mockPrices = {
 let PROFIT_PERCENTAGE = 35;
 let PROFIT_MULTIPLIER = 1.35;
 let KES_TO_USD_RATE = 0.0078;
+let NGN_TO_USD_RATE = 0.000738;
 
 // Watch for changes in admin settings
 if (db) {
@@ -112,11 +113,12 @@ if (db) {
         console.log(`📈 Profit margin updated from Firestore: ${PROFIT_PERCENTAGE}%`);
       }
       if (data.usdToKesRate !== undefined) {
-        KES_TO_USD_RATE = 1 / Number(data.usdToKesRate); // UI usually stores KES per 1 USD (e.g. 130)
-        // Wait, let's check Settings.jsx: usdToKesRate: 128.2
-        // If 1 USD = 128.2 KES, then 1 KES = 1/128.2 USD
-        // Previous hardcoded: 0.0078 (which is roughly 1/128.2)
-        console.log(`💱 Exchange rate updated from Firestore: 1 USD = ${data.usdToKesRate} KES (1 KES = $${KES_TO_USD_RATE.toFixed(5)})`);
+        KES_TO_USD_RATE = 1 / Number(data.usdToKesRate);
+        console.log(`💱 KES Rate updated: 1 USD = ${data.usdToKesRate} KES (1 KES = $${KES_TO_USD_RATE.toFixed(5)})`);
+      }
+      if (data.usdToNgnRate !== undefined) {
+        NGN_TO_USD_RATE = 1 / Number(data.usdToNgnRate);
+        console.log(`💱 NGN Rate updated: 1 USD = ${data.usdToNgnRate} NGN (1 NGN = $${NGN_TO_USD_RATE.toFixed(5)})`);
       }
     }
   }, err => {
@@ -418,6 +420,8 @@ app.get('/api/config', (req, res) => {
     profitPercentage: PROFIT_PERCENTAGE,
     kesToUsdRate: KES_TO_USD_RATE,
     usdToKesRate: 1 / KES_TO_USD_RATE,
+    ngnToUsdRate: NGN_TO_USD_RATE,
+    usdToNgnRate: 1 / NGN_TO_USD_RATE,
     status: 'ok'
   });
 });
@@ -691,10 +695,12 @@ app.get('/paystack/verify/:reference', async (req, res) => {
       const data = resp.data.data;
       let amount = data.amount / 100;
       const currency = data.currency;
-      
-      // Convert KES to USD if necessary
+
+      // Convert local currencies to USD
       if (currency === 'KES') {
         amount = Number((amount * KES_TO_USD_RATE).toFixed(2));
+      } else if (currency === 'NGN') {
+        amount = Number((amount * NGN_TO_USD_RATE).toFixed(2));
       }
       
       let metadata = data.metadata || {};
@@ -714,8 +720,8 @@ app.get('/paystack/verify/:reference', async (req, res) => {
             type: 'credit',
             amount: amount,
             currency: currency,
-            originalAmount: data.amount / 100,  // Raw amount before KES conversion
-            originalCurrency: currency,          // Track original currency for audit trail
+            originalAmount: data.amount / 100,  // Raw local amount
+            originalCurrency: currency,          // Track original currency
             description: `Funded wallet via Paystack Verify`,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             reference: reference,
@@ -779,9 +785,11 @@ app.post('/api/payments/webhook', async (req, res) => {
       let amount = data.amount / 100; 
       const currency = data.currency;
 
-      // Convert KES to USD if necessary
+      // Convert local currencies to USD
       if (currency === 'KES') {
         amount = Number((amount * KES_TO_USD_RATE).toFixed(2));
+      } else if (currency === 'NGN') {
+        amount = Number((amount * NGN_TO_USD_RATE).toFixed(2));
       }
 
       let metadata = data.metadata || {};
